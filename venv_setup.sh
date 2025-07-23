@@ -1,0 +1,1 @@
+export PYTHONPATH=/home/mobilerobot/richard/AprilTag/scripts:$PYTHONPATH
