@@ -8,6 +8,7 @@ import numpy as np
 from utils import RealsenseImageGenerator
 from default_multi_realsense_cfg import get_default_multi_realsense_cfg
 import json
+from scipy.spatial.transform import Rotation as R
 
 camera_serial_numbers = ["215122255998"]
 rsgi = RealsenseImageGenerator(camera_serial_numbers)
@@ -37,7 +38,78 @@ from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, MultiLeRobot
 # local dataset
 dataset = LeRobotDataset(root="/home/mobilerobot/lw_hfdata/jmarangola/garbage_test_k", repo_id="jmarangola/garbage_test_k")
 # dataset.push_to_hub()
-import pdb; pdb.set_trace()
+color_image = (dataset[-1]['observation.image.ego_global'].permute(1, 2, 0) * 255).data.cpu().numpy().astype(np.uint8)
+
+gripper_xyz = dataset[-1]['observation.state'][:3]
+gripper_6d = dataset[-1]['observation.state'][3:9]
+gripper_grip = dataset[-1]['observation.state'][-1]
+
+
+options = apriltag.DetectorOptions(families="tag36h11")
+detector = apriltag.Detector(options, searchpath=apriltag._get_dll_path())
+
+
+gray = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
+color_image = cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR)
+result, overlay = apriltag.detect_tags(color_image,
+                                       detector,
+                                       camera_params=[intrinsics_object.fx, intrinsics_object.fy, intrinsics_object.ppx, intrinsics_object.ppy],
+                                       tag_size=0.01,
+                                       vizualization=3,
+                                       verbose=3,
+                                       annotation=True)
+if len(result) > 0:
+    # result_pose = result[1]
+    print("showing overlay")
+    cv2.imshow('RealSense', overlay)
+    cv2.waitKey(0)
+    T_tag_wrt_camframe = result[1]
+    print("T_tag_wrt_camframe")
+    print(T_tag_wrt_camframe)
+
+
+    """
+    Pose of TCP in roboframe
+    """
+    homo_ph = np.eye(4)
+    homo_ph[:3, 3] = gripper_xyz
+
+    rx = gripper_6d[0:3]    
+    ry = gripper_6d[3:6]
+    rx = rx / np.linalg.norm(rx)
+    ry = ry / np.linalg.norm(ry)
+    rz = np.cross(rx, ry)
+    homo_ph[:3, :3] = np.stack([rx, ry, rz])
+    T_ee_wrt_roboframe = homo_ph
+
+    print("T_ee_wrt_roboframe")
+    print(T_ee_wrt_roboframe)
+
+    print("pose_of_tag_in_roboframe")
+    T_tcp_wrt_ee = np.eye(4)
+    # 90 deg ccw rotation about the z of parent frame
+    # 90 deg ccw rotation about the x axis of the new frame
+    T_tcp_wrt_ee[:3, :3] = R.from_euler("X", 90, degrees=True).as_matrix() @ R.from_euler("Z", 90, degrees=True).as_matrix()
+    T_tcp_wrt_ee[:3, 3] = np.array([0, 0, .1358])
+
+    T_tcp_wrt_roboframe = T_ee_wrt_roboframe @ T_tcp_wrt_ee
+
+    """
+    End get pose of TCP in roboframe
+    """
+
+    cv2.imwrite('calib_image.png', overlay)
+
+    cv2.imwrite('calib_original_image.png', color_image)
+    np.savez("calib.npz", T_tag_wrt_camframe=T_tag_wrt_camframe,
+             T_ee_wrt_roboframe=T_ee_wrt_roboframe)
+
+    # apply a 90 deg CCW rotation along the Y
+    # apply a 90 deg CCW rotation along Z
+else:
+    cv2.imshow('RealSense', color_image)
+cv2.waitKey(1)
+
 """
 Import the robotics controller code here. We will need to servo the robot into the view of the camera, record the end effector position, and use that for the calibration.
 """
@@ -51,55 +123,55 @@ End import
 """
 
 # loop until we acquire an image
-while True:
-    time.sleep(1/30)
+# while True:
+#     time.sleep(1/30)
 
-    # convert from rgb back to bgr for opencv visualization
-    color_image = rsgi.get_images(False)[-1]['rgb'][:, :, ::-1]
-
-
-    options = apriltag.DetectorOptions(families="tag36h11")
-    # detector = apriltag.Detector(options)
-    detector = apriltag.Detector(options, searchpath=apriltag._get_dll_path())
+#     # convert from rgb back to bgr for opencv visualization
+#     color_image = rsgi.get_images(False)[-1]['rgb'][:, :, ::-1]
 
 
-    gray = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
-    result, overlay = apriltag.detect_tags(color_image,
-                                           detector,
-                                           camera_params=[intrinsics_object.fx, intrinsics_object.fy, intrinsics_object.ppx, intrinsics_object.ppy],
-                                           tag_size=0.01,
-                                           vizualization=3,
-                                           verbose=3,
-                                           annotation=True
-                                           )
+#     options = apriltag.DetectorOptions(families="tag36h11")
+#     # detector = apriltag.Detector(options)
+#     detector = apriltag.Detector(options, searchpath=apriltag._get_dll_path())
 
-    # retrieve pose of tag in camera frame
-    # retrieve pose of end effector (effectively pose of tag) in robot frame
-    # TODO: do some test to see that they are physically consistent
 
-    if len(result) > 0:
-        # result_pose = result[1]
-        print("showing overlay")
-        cv2.imshow('RealSense', overlay)
-        pose_of_tag_in_camframe = result[1]
+#     gray = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
+#     result, overlay = apriltag.detect_tags(color_image,
+#                                            detector,
+#                                            camera_params=[intrinsics_object.fx, intrinsics_object.fy, intrinsics_object.ppx, intrinsics_object.ppy],
+#                                            tag_size=0.01,
+#                                            vizualization=3,
+#                                            verbose=3,
+#                                            annotation=True
+#                                            )
 
-        # robot_state = left_robot.get_state(robot_attr_map[Chirality.LEFT]['GripperInterface'])
+#     # retrieve pose of tag in camera frame
+#     # retrieve pose of end effector (effectively pose of tag) in robot frame
+#     # TODO: do some test to see that they are physically consistent
 
-        # pose_of_ee_in_roboframe = robot_state.ee_pose
+#     if len(result) > 0:
+#         # result_pose = result[1]
+#         print("showing overlay")
+#         cv2.imshow('RealSense', overlay)
+#         T_tag_wrt_camframe = result[1]
 
-        # print("pose_of_tag_in_camframe")
-        # print(pose_of_tag_in_camframe)
-        # print("pose_of_ee_in_roboframe")
-        # print(pose_of_ee_in_roboframe)
+#         # robot_state = left_robot.get_state(robot_attr_map[Chirality.LEFT]['GripperInterface'])
 
-        cv2.imwrite('calib_image.png', overlay)
+#         # T_ee_wrt_roboframe = robot_state.ee_pose
 
-        cv2.imwrite('calib_original_image.png', color_image)
-        # np.savez("calib.npz", pose_of_tag_in_camframe=pose_of_tag_in_camframe,
-        #          pose_of_ee_in_roboframe=pose_of_ee_in_roboframe)
+#         # print("T_tag_wrt_camframe")
+#         # print(T_tag_wrt_camframe)
+#         # print("T_ee_wrt_roboframe")
+#         # print(T_ee_wrt_roboframe)
 
-        # apply a 90 deg CCW rotation along the Y
-        # apply a 90 deg CCW rotation along Z
-    else:
-        cv2.imshow('RealSense', color_image)
-    cv2.waitKey(1)
+#         cv2.imwrite('calib_image.png', overlay)
+
+#         cv2.imwrite('calib_original_image.png', color_image)
+#         # np.savez("calib.npz", T_tag_wrt_camframe=T_tag_wrt_camframe,
+#         #          T_ee_wrt_roboframe=T_ee_wrt_roboframe)
+
+#         # apply a 90 deg CCW rotation along the Y
+#         # apply a 90 deg CCW rotation along Z
+#     else:
+#         cv2.imshow('RealSense', color_image)
+#     cv2.waitKey(1)
