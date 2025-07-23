@@ -94,6 +94,8 @@ if len(result) > 0:
 
     T_tcp_wrt_roboframe = T_ee_wrt_roboframe @ T_tcp_wrt_ee
 
+    # this is equal to T_tag_wrt_roboframe
+
     """
     End get pose of TCP in roboframe
     """
@@ -102,7 +104,9 @@ if len(result) > 0:
 
     cv2.imwrite('calib_original_image.png', color_image)
     np.savez("calib.npz", T_tag_wrt_camframe=T_tag_wrt_camframe,
-             T_ee_wrt_roboframe=T_ee_wrt_roboframe)
+             T_ee_wrt_roboframe=T_ee_wrt_roboframe,
+             T_tcp_wrt_roboframe=T_tcp_wrt_roboframe,
+             T_tag_wrt_roboframe=T_tcp_wrt_roboframe)
 
     # apply a 90 deg CCW rotation along the Y
     # apply a 90 deg CCW rotation along Z
