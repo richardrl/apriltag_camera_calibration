@@ -9,8 +9,25 @@ from utils import RealsenseImageGenerator
 from default_multi_realsense_cfg import get_default_multi_realsense_cfg
 import json
 from scipy.spatial.transform import Rotation as R
+import argparse
+import lerobot_util
 
-camera_serial_numbers = ["215122255998"]
+
+parser = argparse.ArgumentParser(description="A simple script using argparse.") #
+
+# Add a positional argument
+# parser.add_argument("name", help="The name of the user.") #
+
+# Add an optional argument (flag)
+parser.add_argument("cam_serial", type=str, default="215122255998")
+parser.add_argument("lerobot_root", type=str, default="/home/mobilerobot/lw_hfdata/jmarangola/garbage_test_k")
+parser.add_argument("lerobot_repo_id", type=str, default="jmarangola/garbage_test_k")
+
+# Parse the arguments
+args = parser.parse_args() #
+
+
+camera_serial_numbers = [args.cam_serial]
 rsgi = RealsenseImageGenerator(camera_serial_numbers)
 
 print("Intrinsics")
@@ -36,9 +53,9 @@ In order to separate the calibration and teleop code,
 """
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, MultiLeRobotDataset
 # local dataset
-dataset = LeRobotDataset(root="/home/mobilerobot/lw_hfdata/jmarangola/garbage_test_k", repo_id="jmarangola/garbage_test_k")
+dataset = LeRobotDataset(root=args.lerobot_root, repo_id=args.lerobot_repo_id)
 # dataset.push_to_hub()
-color_image = (dataset[-1]['observation.image.ego_global'].permute(1, 2, 0) * 255).data.cpu().numpy().astype(np.uint8)
+color_image = lerobot_util.dataset_float_img_to_uint_img(dataset[-1]['observation.image.ego_global'])
 
 gripper_xyz = dataset[-1]['observation.state'][:3]
 gripper_6d = dataset[-1]['observation.state'][3:9]
@@ -63,6 +80,7 @@ if len(result) > 0:
     print("showing overlay")
     cv2.imshow('RealSense', overlay)
     cv2.waitKey(0)
+    cv2.destroyAllWindows()
     T_tag_wrt_camframe = result[1]
     print("T_tag_wrt_camframe")
     print(T_tag_wrt_camframe)
@@ -71,28 +89,20 @@ if len(result) > 0:
     """
     Pose of TCP in roboframe
     """
-    homo_ph = np.eye(4)
-    homo_ph[:3, 3] = gripper_xyz
 
-    rx = gripper_6d[0:3]    
-    ry = gripper_6d[3:6]
-    rx = rx / np.linalg.norm(rx)
-    ry = ry / np.linalg.norm(ry)
-    rz = np.cross(rx, ry)
-    homo_ph[:3, :3] = np.stack([rx, ry, rz])
-    T_ee_wrt_roboframe = homo_ph
+    T_ee_wrt_roboframe = lerobot_util.state_to_ee_pose(dataset[-1]['observation.state'])
 
     print("T_ee_wrt_roboframe")
     print(T_ee_wrt_roboframe)
 
     print("pose_of_tag_in_roboframe")
-    T_tcp_wrt_ee = np.eye(4)
+    T_tag_wrt_ee = np.eye(4)
     # 90 deg ccw rotation about the z of parent frame
     # 90 deg ccw rotation about the x axis of the new frame
-    T_tcp_wrt_ee[:3, :3] = R.from_euler("X", 90, degrees=True).as_matrix() @ R.from_euler("Z", 90, degrees=True).as_matrix()
-    T_tcp_wrt_ee[:3, 3] = np.array([0, 0, .1358])
+    T_tag_wrt_ee[:3, :3] = R.from_euler("X", 90, degrees=True).as_matrix() @ R.from_euler("Z", 90, degrees=True).as_matrix()
+    T_tag_wrt_ee[:3, 3] = np.array([0, 0, .1358])
 
-    T_tcp_wrt_roboframe = T_ee_wrt_roboframe @ T_tcp_wrt_ee
+    T_tag_wrt_roboframe = T_ee_wrt_roboframe @ T_tag_wrt_ee
 
     # this is equal to T_tag_wrt_roboframe
 
@@ -105,8 +115,8 @@ if len(result) > 0:
     cv2.imwrite('calib_original_image.png', color_image)
     np.savez("calib.npz", T_tag_wrt_camframe=T_tag_wrt_camframe,
              T_ee_wrt_roboframe=T_ee_wrt_roboframe,
-             T_tcp_wrt_roboframe=T_tcp_wrt_roboframe,
-             T_tag_wrt_roboframe=T_tcp_wrt_roboframe)
+             T_tag_wrt_roboframe=T_tag_wrt_roboframe,
+             T_cam_wrt_roboframe=T_tag_wrt_roboframe @ np.linalg.inv(T_tag_wrt_camframe))
 
     # apply a 90 deg CCW rotation along the Y
     # apply a 90 deg CCW rotation along Z
